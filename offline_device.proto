@@ -1,0 +1,63 @@
+message Heartbeat {
+  required string guid = 1;
+}
+
+message SignatureRequest {
+  enum SignatureType {
+    PARTIAL = 1;
+    FULL = 2;
+  }
+
+  required WalletIdentifer wallet = 1;
+  required SignatureType type = 2;
+  required string txDP = 3;
+  optional bool keepWalletUnlocked = 4;
+}
+
+message SignatureResponse {
+  required string txDP = 1;
+}
+
+message OnlineWalletRequest {
+  optional string uniqueIDB58 = 1;
+  optional bool metadataOnly = 2 [default = true];
+}
+
+message OnlineWalletResponse {
+  repeated OnlineWallet wallets = 1;
+}
+
+message Notification {
+  enum NotificationType {
+    INFORMATION = 1;
+    ERROR = 2;
+    CRITICAL_ERROR = 3;
+  }
+
+  required NotificationType type = 1;
+  required string message = 2;
+}
+
+message CreateWallet {
+  required string name = 1;
+  optional string description = 2;
+  required bool withEncrypt = 3;
+  optional float kdfSec = 4;
+  optional float kdfBytes = 5;
+}
+
+message Reset {
+  required bool shutdown = 1;
+}
+
+message WalletIdentifer {
+  required string uniqueIDB58 = 1;
+  required int32 lastComputedChainIndex = 2;
+}
+
+message OnlineWallet {
+  required string uniqueIDB58 = 1;
+  required string labelName = 2;
+  required string labelDescr = 3;
+  optional bytes packedBytes = 4;
+}

@@ -38,6 +38,9 @@ import traceback
 import threading
 from struct import pack, unpack
 from datetime import datetime
+import serial
+import offline_device_pb2 as pb
+import uuid
 
 
 from sys import argv
@@ -7932,7 +7935,7 @@ class PyBtcWallet(object):
 
 
    #############################################################################
-   def unpackHeader(self, binUnpacker):
+   def unpackHeader(self, binUnpacker, fileUpdate=True):
       """
       Unpacking the header information from a wallet file.  See the help text
       on the base class, PyBtcWallet, for more information on the wallet
@@ -7993,7 +7996,7 @@ class PyBtcWallet(object):
       rawAddrData = binUnpacker.get(BINARY_CHUNK, self.pybtcaddrSize)
       self.addrMap['ROOT'] = PyBtcAddress().unserialize(rawAddrData)
       fixedAddrData = self.addrMap['ROOT'].serialize()
-      if not rawAddrData==fixedAddrData:
+      if fileUpdate and not rawAddrData==fixedAddrData:
          self.walletFileSafeUpdate([ \
             [WLT_UPDATE_MODIFY, self.offsetRootAddr, fixedAddrData]])
 
@@ -8059,8 +8062,16 @@ class PyBtcWallet(object):
       wltdata = BinaryUnpacker(wltfile.read())
       wltfile.close()
 
+      TimerStop('readWalletFile')
+
+      return self.readWalletData(wltdata, doScanNow)
+
+   #############################################################################
+   def readWalletData(self, wltdata, doScanNow=False, fileUpdate=True):
+      TimerStart('readWalletData')
+
       self.cppWallet = Cpp.BtcWallet()
-      self.unpackHeader(wltdata)
+      self.unpackHeader(wltdata, fileUpdate=fileUpdate)
 
       self.lastComputedChainIndex = -UINT32_MAX
       self.lastComputedChainAddr160  = None
@@ -8073,7 +8084,7 @@ class PyBtcWallet(object):
             newAddr.walletByteLoc = byteLocation + 21
             # Fix byte errors in the address data
             fixedAddrData = newAddr.serialize()
-            if not rawData==fixedAddrData:
+            if fileUpdate and not rawData==fixedAddrData:
                self.walletFileSafeUpdate([ \
                   [WLT_UPDATE_MODIFY, newAddr.walletByteLoc, fixedAddrData]])
             if newAddr.useEncryption:
@@ -8112,7 +8123,7 @@ class PyBtcWallet(object):
          LOGERROR('Wallets older than version 1.35 no loger supported!')
          return
 
-      TimerStop('readWalletFile')
+      TimerStop('readWalletData')
 
       return self
 
@@ -11922,14 +11933,125 @@ def SaveTimingsCSV(fname):
    f.write('\n\nNote: timings may be incorrect if errors '
                       'were triggered in the timed functions')
    print 'Saved timings to file: %s' % fname
-   
 
+class PySerialConnection(threading.Thread):
+   # number of seconds between heartbeats
+   HEARTBEAT_INTERVAL = 60
 
+   lastHeartbeat = 0
+   lastHeartbeatGuid = ''
+   isConnected = False
+   codeType = {
+      '0': pb.Heartbeat,
+      '1': pb.SignatureRequest,
+      '2': pb.SignatureResponse,
+      '3': pb.OnlineWalletRequest,
+      '4': pb.OnlineWalletResponse,
+      '5': pb.Notification,
+      '6': pb.CreateWallet,
+      '7': pb.Reset
+   }
 
+   def __init__(self, portName, rate, callback):
+      self.port = serial.Serial()
+      self.portName = portName
+      self.rate = rate
+      self.callback = callback
+      threading.Thread.__init__(self)
 
+   def __enter__(self):
+      self.open()
+      return self
 
+   def __exit__(self, exc_type, exc_val, exc_tb):
+      self.close()
 
+   def open(self):
+      if not self.port.isOpen():
+         self.port.setPort(self.portName)
+         try:
+            self.port.setBaudrate(self.rate)
+         except ValueError as err:
+            raise serial.SerialException(err.message)
+         self.port.open()
+      self.isOpen = True
+      if not self.isAlive():
+         self.start()
 
+   def close(self):
+      self.isOpen = False
+      if self.port.isOpen():
+         self.port.close()
 
+   def heartbeat(self, guid=str(uuid.uuid1())):
+      if guid != self.lastHeartbeatGuid:
+         self.lastHeartbeatGuid = guid;
+         beat = pb.Heartbeat()
+         beat.guid = guid
+         self.write(beat)
+         return True
+      return False
 
+   def setConnected(self, connected):
+      if connected != self.isConnected:
+         self.callback(connected)
+         self.isConnected = connected
 
+   def write(self, message):
+      with threading.Lock() as lock:
+         code = (code for code, type in self.codeType.items() if isinstance(message, type)).next()
+         serialized = message.SerializeToString()
+         packed_len = pack('!I', len(serialized))
+         self.port.write(code + packed_len + serialized)
+         self.port.flush()
+         LOGDEBUG('Sent serial message: %s' % serialized)
+
+   def _read(self):
+      code = self._read_n_bytes(1)
+      if not self.codeType.has_key(code):
+         raise UnserializeError("Unrecognized message code '%s'" % code)
+
+      len_buf = self._read_n_bytes(4)
+      msg_len = unpack('!I', len_buf)[0]
+      try:
+         msg_buf = self._read_n_bytes(msg_len)
+
+         msg = self.codeType[code]()
+         msg.ParseFromString(msg_buf)
+         LOGDEBUG('Received serial message: %s' % msg_buf)
+         return msg
+      except OverflowError as err:
+         raise UnserializeError(err.message)
+
+   def _read_n_bytes(self, n):
+      buf = ''
+      while n > 0:
+         data = self.port.read(n)
+         if data == '':
+            raise RuntimeError('unexpected connection close')
+         buf += data
+         n -= len(data)
+      return buf
+
+   def run(self):
+      while self.isOpen:
+         beat = False
+         if self.port.inWaiting():
+            try:
+               msg = self._read()
+
+               if isinstance(msg, pb.Heartbeat):
+                  beat = self.heartbeat(msg.guid)
+                  self.setConnected(True)
+                  self.lastHeartbeat = time.time()
+
+               self.callback(msg)
+            except UnserializeError as err:
+               LOGERROR(err.message)
+
+         if not beat:
+            self.setConnected(time.time() - self.lastHeartbeat < self.HEARTBEAT_INTERVAL)
+            if time.time() - self.lastHeartbeat > self.HEARTBEAT_INTERVAL / 2:
+               self.heartbeat()
+
+         time.sleep(1)

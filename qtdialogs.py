@@ -223,7 +223,14 @@ class DlgNewWallet(ArmoryDialog):
                   'Anyone who gets ahold of your paper backup will be able to spend '
                   'the money in your wallet, so please secure it appropriately.')
 
-      
+      self.chkCreateOffline = QCheckBox('Create wallet on connected serial device')
+      createOfflineTooltip = createToolTipObject(
+                   'Instead of creating this wallet on this online computer, '
+                   'send the specifications to the connected device '
+                   'and receive back a watching only copy.')
+      self.chkCreateOffline.setEnabled(self.main.serialConnection.isConnected)
+      createOfflineTooltip.setEnabled(self.chkCreateOffline.isEnabled())
+
       self.btnAccept    = QPushButton("Accept")
       self.btnCancel    = QPushButton("Cancel")
       self.btnAdvCrypto = QPushButton("Adv. Encrypt Options>>>")
@@ -256,6 +263,9 @@ class DlgNewWallet(ArmoryDialog):
       masterLayout.addWidget(usecryptoTooltip,   5, 1, 1, 1)
       masterLayout.addWidget(self.chkPrintPaper, 6, 0, 1, 1)
       masterLayout.addWidget(paperBackupTooltip, 6, 1, 1, 1)
+      if main.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         masterLayout.addWidget(self.chkCreateOffline,7,0,1, 1)
+         masterLayout.addWidget(createOfflineTooltip, 7,1, 1, 1)
       masterLayout.addWidget(self.cryptoFrame,   8, 0, 3, 3)
    
       masterLayout.addWidget(self.btnbox,       11, 0, 1, 2)
@@ -2561,12 +2571,15 @@ class DlgImportWallet(ArmoryDialog):
       lblImportDescr = QLabel('Chose the wallet import source:')
       self.btnImportFile  = QPushButton("Import Armory wallet from &file")
       self.btnImportPaper = QPushButton("Restore from &paper backup")
+      self.btnImportSerial = QPushButton("Import Armory wallet from &serial device")
+      self.btnImportSerial.setEnabled(main.serialConnection.isConnected)
       self.btnMigrate     = QPushButton("Migrate wallet.dat (main Bitcoin App)")
 
       self.btnImportFile.setMinimumWidth(300)
 
       self.connect( self.btnImportFile,  SIGNAL("clicked()"), self.acceptImport)
       self.connect( self.btnImportPaper, SIGNAL('clicked()'), self.acceptPaper)
+      self.connect( self.btnImportSerial, SIGNAL('clicked()'), self.acceptSerial)
       self.connect( self.btnMigrate,     SIGNAL('clicked()'), self.acceptMigrate)
 
       ttip1 = createToolTipObject('Import an existing Armory wallet, usually with a '
@@ -2582,8 +2595,13 @@ class DlgImportWallet(ArmoryDialog):
                                   'from the regular Bitcoin client to an Armory '
                                   'wallet.')
 
+      ttip4 = createToolTipObject('If you have a serial device connected '
+                                   'to this computer, you can import a watching-only'
+                                   'copy of any wallets stored there.')
+
+
       w,h = relaxedSizeStr(ttip1, '(?)') 
-      for ttip in (ttip1, ttip2):
+      for ttip in (ttip1, ttip2, ttip4):
          ttip.setMaximumSize(w,h)
          ttip.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
@@ -2593,13 +2611,15 @@ class DlgImportWallet(ArmoryDialog):
       layout.addWidget(self.btnImportFile,  1,0, 1, 2); layout.addWidget(ttip1, 1,2,1,1)
       layout.addWidget(self.btnImportPaper, 2,0, 1, 2); layout.addWidget(ttip2, 2,2,1,1)
       #layout.addWidget(self.btnMigrate,     3,0, 1, 2); layout.addWidget(ttip3, 3,2,1,1)
+      if main.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         layout.addWidget(self.btnImportSerial,4,0, 1, 2); layout.addWidget(ttip4, 4,2,1,1)
 
       if self.main.usermode in (USERMODE.Advanced, USERMODE.Expert):
          lbl = QRichLabel('You can manually add wallets to armory by copying them '
                       'into your application directory then restarting Armory: '
                       '\n\n%s' % ARMORY_HOME_DIR, doWrap=True)
          lbl.setWordWrap(True)
-         layout.addWidget(lbl, 4,0, 1, 2); 
+         layout.addWidget(lbl, 5,0, 1, 2); 
 
       btnCancel = QPushButton('Cancel')
       self.connect(btnCancel, SIGNAL('clicked()'), self.reject)
@@ -2621,12 +2641,21 @@ class DlgImportWallet(ArmoryDialog):
    def acceptPaper(self):
       self.importType_file    = False
       self.importType_paper   = True
+      self.importType_serial  = False
       self.importType_migrate = False
       self.accept()
-      
+
+   def acceptSerial(self):
+      self.importType_file    = False
+      self.importType_paper   = False
+      self.importType_serial  = True
+      self.importType_migrate = False
+      self.accept()
+
    def acceptMigrate(self):
       self.importType_file    = False
       self.importType_paper   = False
+      self.importType_serial  = False
       self.importType_migrate = True
       self.accept()
 
@@ -3858,7 +3887,32 @@ class DlgImportPaperWallet(ArmoryDialog):
       DlgExecLongProcess(fillAddrPoolAndAccept, "Recovering wallet...", self, self.main).exec_()
       
 
+class DlgImportSerialWallet(ArmoryDialog):
+   def __init__(self, parent=None, main=None, response=None):
+      super(DlgImportSerialWallet, self).__init__(parent, main)
 
+      self.setWindowTitle('Import Wallet from serial device')
+      self.setWindowIcon(QIcon(self.main.iconfile))
+
+      lblImportDescr = QLabel('Choose the wallet to import:')
+      self.combo = QComboBox(self)
+      for wlt in response.wallets:
+         self.combo.addItem("%s: %s (%s)" % (wlt.uniqueIDB58, wlt.labelName, wlt.labelDescr), wlt.uniqueIDB58)
+
+      h,w = relaxedSizeNChar(self, 50)
+      self.combo.setMinimumSize(h,w)
+
+      buttonbox = QDialogButtonBox(QDialogButtonBox.Ok |\
+                                   QDialogButtonBox.Cancel)
+      self.connect(buttonbox, SIGNAL('accepted()'), self.accept)
+      self.connect(buttonbox, SIGNAL('rejected()'), self.reject)
+
+      # Set up the layout
+      layout = QVBoxLayout()
+      layout.addWidget(lblImportDescr)
+      layout.addWidget(self.combo)
+      layout.addWidget(buttonbox)
+      self.setLayout(layout)
 
 ################################################################################
 class DlgSetComment(ArmoryDialog):
@@ -5751,6 +5805,8 @@ class DlgOfflineTxCreated(ArmoryDialog):
       self.txdp   = txdp
       self.wlt    = wlt
 
+      self.main.serialEmitter.register(self.receiveSerialMessage)
+
       canSign = False
       lblDescr = QRichLabel('')
       if determineWalletType(wlt, self.main)[0]==WLTTYPES.Offline:
@@ -5823,6 +5879,17 @@ class DlgOfflineTxCreated(ArmoryDialog):
          'Copy the transaction data to the clipboard, so that it can be '
          'pasted into an email or a text document.')
 
+      self.btnTransmitStart = QPushButton('Transmit to offline device')
+      self.btnTransmitStart.setEnabled(self.main.serialConnection.isConnected)
+      self.connect(self.btnTransmitStart, SIGNAL('clicked()'), self.doTxSerialTransmit)
+      ttipTransmit = createToolTipObject( \
+         'Transmit the transaction data to the configured offline device '
+         'to sign and return the transaction proposal.')
+
+#      self.btnTransmitCancel = QPushButton('Cancel transmission')
+#      self.btnTransmitCancel.setVisible(False)
+#      self.connect(self.btnTransmitCancel, SIGNAL('clicked()'), self.cancelTxSerialTransmit)
+
       lblInstruct = QRichLabel('<b>Instructions for completing this transaction:</b>')
       lblUTX = QRichLabel('<b>Transaction Data</b> \t (Unsigned ID: %s)' % txdp.uniqueB58)
       w,h = tightSizeStr(GETFONT('Fixed',8),'0'*85)[0], int(12*8.2)
@@ -5871,9 +5938,12 @@ class DlgOfflineTxCreated(ArmoryDialog):
       frmLowerLayout.addWidget(ttipSave,      1,2,  1,1)
       frmLowerLayout.addWidget(btnCopy,       2,1,  1,1)
       frmLowerLayout.addWidget(ttipCopy,      2,2,  1,1)
-      frmLowerLayout.addWidget(self.lblCopied,3,1,  1,2)
+      if main.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         frmLowerLayout.addWidget(self.btnTransmitStart,   3,1,  1,1)
+         frmLowerLayout.addWidget(ttipTransmit,            3,2,  1,1)
+      frmLowerLayout.addWidget(self.lblCopied,4,1,  1,2)
 
-      frmLowerLayout.addWidget(nextStepStrip, 4,0,  1,3)
+      frmLowerLayout.addWidget(nextStepStrip, 5,0,  1,3)
       frmLower.setLayout(frmLowerLayout)
 
 
@@ -5902,6 +5972,48 @@ class DlgOfflineTxCreated(ArmoryDialog):
       clipb.clear()
       clipb.setText(self.txtSigned.toPlainText())
       self.lblCopiedS.setText('<i>Copied!</i>')
+
+   def receiveSerialMessage(self, msg):
+      if isinstance(msg, bool):
+         self.btnTransmitStart.setEnabled(msg)
+      elif isinstance(msg, pb.Notification):
+         if msg.type == msg.INFORMATION:
+            self.lblCopied.setText('<i>%s</i>' % msg.message)
+         else:
+            self.lblCopied.setText('<font color="%s">%s</font>' % (msg.message, htmlColor("TextWarn")))
+            if msg.type == msg.CRITICAL_ERROR:
+               self.cancelTxSerialTransmit(False)
+      elif isinstance(msg, pb.SignatureResponse):
+         self.cancelTxSerialTransmit(False)
+
+         dlgRvw = DlgReviewOfflineTx(self.parent, self.main)
+         dlgRvw.txtTxDP.setText(msg.txDP)
+         dlgRvw.exec_()
+         self.accept()
+
+   def cancelTxSerialTransmit(self, reset):
+      if reset:
+         msg = pb.Reset()
+         msg.shutdown = False
+         self.main.serialConnection.write(msg)
+
+      self.btnTransmitStart.setEnabled(True)
+#      self.btnTransmitCancel.setVisible(True)
+      self.lblCopied.clear()
+
+   def doTxSerialTransmit(self):
+      """ Send the Unsigned-Tx block of data to TODO: """
+      self.btnTransmitStart.setEnabled(False)
+#      self.btnTransmitCancel.setVisible(True)
+
+      msg = pb.SignatureRequest()
+      msg.wallet.uniqueIDB58 = self.wlt.uniqueIDB58
+      msg.wallet.lastComputedChainIndex = self.wlt.lastComputedChainIndex
+      msg.type = msg.FULL
+      msg.txDP = str(self.txtTxDP.toPlainText())
+
+      self.main.serialConnection.write(msg)
+      self.lblCopied.setText('Sent unsigned tx')
 
    def doSaveFile(self):
       """ Save the Unsigned-Tx block of data """
@@ -6032,7 +6144,13 @@ class DlgOfflineTxCreated(ArmoryDialog):
       DlgReviewOfflineTx(self, self.main).exec_()
       self.accept()
             
+   def accept(self, *args):
+      self.main.serialEmitter.unregister(self.receiveSerialMessage)
+      super(DlgOfflineTxCreated, self).accept(*args)
 
+   def reject(self, *args):
+      self.main.serialEmitter.unregister(self.receiveSerialMessage)
+      super(DlgOfflineTxCreated, self).reject(*args)
 
 ################################################################################
 class DlgOfflineSelect(ArmoryDialog):
@@ -9659,6 +9777,13 @@ class DlgPreferences(ArmoryDialog):
       if moc=='Minimize':
          self.chkMinOrClose.setChecked(True)
 
+      lblSerialRate = QRichLabel('Serial baud rate')
+      self.cmbSerialRate = QComboBox()
+      self.cmbSerialRate.clear()
+      for rate in main.serialConnection.port.getSupportedBaudrates():
+         self.cmbSerialRate.addItem(rate[0])
+         if rate[1] == main.serialRate:
+            self.cmbSerialRate.setCurrentIndex(self.cmbSerialRate.count()-1)
 
       #doInclFee = self.main.getSettingOrSetDefault('LedgDisplayFee', True)
       #lblLedgerFee = QRichLabel('<b>Include fee in transaction value on the '
@@ -9770,6 +9895,15 @@ class DlgPreferences(ArmoryDialog):
       self.connect(self.btnCancel, SIGNAL('clicked()'), self.reject)
       self.connect(self.btnAccept, SIGNAL('clicked()'), self.accept)
 
+      lblSerialSettings = QRichLabel('<b>Serial Device Settings:</b>')
+      lblSerialDescription = QRichLabel('If you have an offline device connected '
+                                        'though a serial port, enter the port name '
+                                        'and baud rate here to allow two way '
+                                        'communication with Armory.')
+      lblSerialPort = QRichLabel('Serial port')
+      self.txtSerialPort = QLineEdit()
+      if main.serialPort:
+         self.txtSerialPort.setText(main.serialPort)
 
 
       self.cmbUsermode = QComboBox()
@@ -9806,6 +9940,20 @@ class DlgPreferences(ArmoryDialog):
 
       i+=1
       frmLayout.addWidget( HLINE(),               i,0, 1,3)
+
+      if main.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         i+=1
+         frmLayout.addWidget( lblSerialSettings,     i,0, 1,3)
+         i+=1
+         frmLayout.addWidget( lblSerialPort,         i,0, 1,1)
+         frmLayout.addWidget( self.txtSerialPort,    i,2, 1,1)
+         i+=1
+         frmLayout.addWidget( lblSerialRate,         i,0, 1,1)
+         frmLayout.addWidget( self.cmbSerialRate,    i,2, 1,1)
+         i+=1
+         frmLayout.addWidget( lblSerialDescription,  i,0, 1,3)
+         i+=1
+         frmLayout.addWidget( HLINE(),               i,0, 1,3)
 
       i+=1
       frmLayout.addWidget(subFrm,                 i,0, 1,3)
@@ -9927,6 +10075,11 @@ class DlgPreferences(ArmoryDialog):
       self.main.writeSetting('NotifyBtcOut', self.chkBtcOut.isChecked())
       self.main.writeSetting('NotifyDiscon', self.chkDiscon.isChecked())
       self.main.writeSetting('NotifyReconn', self.chkReconn.isChecked())
+
+      self.main.writeSetting('Serial_Port', str(self.txtSerialPort.text()))
+      self.main.writeSetting('Serial_Rate', int(self.cmbSerialRate.currentText()))
+
+      self.main.setupSerialConnection()
 
       self.main.createCombinedLedger()
       super(DlgPreferences, self).accept(*args)

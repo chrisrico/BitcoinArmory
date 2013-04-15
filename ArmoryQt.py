@@ -24,6 +24,7 @@ import threading
 import platform
 import traceback
 import socket
+import zlib
 from datetime import datetime
 
 # PyQt4 Imports
@@ -121,13 +122,23 @@ class ArmoryMainWindow(QMainWindow):
       self.setupSystemTray()
       self.setupUriRegistration()
 
+      # Setup serial connection
+      self.setupSerialConnection()
 
       self.extraHeartbeatOnline = []
       self.extraHeartbeatAlways = []
 
       self.lblArmoryStatus = QRichLabel('<font color=%s><i>Disconnected</i></font>' % \
                                            htmlColor('TextWarn'), doWrap=False)
+      self.lblArmoryStatus.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
       self.statusBar().insertPermanentWidget(0, self.lblArmoryStatus)
+
+
+      self.lblSerialStatus = QRichLabel('<font color=%s><i>Serial Disconnected</i></font>' % \
+                                           htmlColor('TextWarn'), doWrap=False)
+      self.lblSerialStatus.setFrameStyle(QFrame.StyledPanel | QFrame.Sunken)
+      if self.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         self.statusBar().insertPermanentWidget(1, self.lblSerialStatus)
 
       # Keep a persistent printer object for paper backups
       self.printer = QPrinter(QPrinter.HighResolution)
@@ -399,7 +410,7 @@ class ArmoryMainWindow(QMainWindow):
       layoutUpDown.setVerticalSpacing(2)
       self.frmLedgUpDown.setLayout(layoutUpDown)
       self.frmLedgUpDown.setFrameStyle(STYLE_SUNKEN)
-      
+
 
       frmLower = makeHorizFrame([ frmFilter, \
                                  'Stretch', \
@@ -434,7 +445,7 @@ class ArmoryMainWindow(QMainWindow):
       btnRecvBtc   = QPushButton("Receive Bitcoins")
       btnWltProps  = QPushButton("Wallet Properties")
       btnOfflineTx = QPushButton("Offline Transactions")
- 
+
 
       self.connect(btnWltProps, SIGNAL('clicked()'), self.execDlgWalletDetails)
       self.connect(btnRecvBtc,  SIGNAL('clicked()'), self.clickReceiveCoins)
@@ -870,6 +881,42 @@ class ArmoryMainWindow(QMainWindow):
          
          
 
+   class SerialMessageEmitter(QObject):
+      messageSignal = pyqtSignal(object)
+
+      def __init__(self, parent):
+         QObject.__init__(self, parent)
+
+      def messageReceived(self, message):
+         self.messageSignal.emit(message)
+
+      def register(self, method):
+         self.messageSignal.connect(method)
+
+      def unregister(self, method):
+         self.messageSignal.disconnect(method)
+
+   def serialConnectionChanged(self, message):
+      if isinstance(message, bool):
+         if message:
+            self.lblSerialStatus.setText('<font color=%s>Serial Connected</font>' % htmlColor('TextGreen'))
+         else:
+            self.lblSerialStatus.setText('<font color=%s><i>Serial Disconnected</i></font>' % htmlColor('TextWarn'))
+
+   def setupSerialConnection(self):
+      self.serialPort = self.getSettingOrSetDefault('Serial_Port', None)
+      self.serialRate = self.getSettingOrSetDefault('Serial_Rate', None)
+      self.serialEmitter = self.SerialMessageEmitter(self)
+      self.serialEmitter.register(self.serialConnectionChanged)
+      self.serialConnection = PySerialConnection(
+                                 self.serialPort,
+                                 self.serialRate,
+                                 self.serialEmitter.messageReceived)
+      if self.usermode in (USERMODE.Advanced, USERMODE.Expert):
+         try:
+            self.serialConnection.open()
+         except serial.SerialException:
+            LOGERROR("Serial port '%s' is not available at '%s' baud" % (self.serialPort, self.serialRate))
 
    #############################################################################
    def execOfflineTx(self):
@@ -2090,6 +2137,18 @@ class ArmoryMainWindow(QMainWindow):
          kdfSec   = dlg.kdfSec
          kdfBytes = dlg.kdfBytes
 
+         if dlg.chkCreateOffline.isChecked():
+            msg = pb.CreateWallet()
+            msg.name = name
+            msg.description = descr
+            msg.withEncrypt = dlg.chkUseCrypto.isChecked()
+            if msg.withEncrypt:
+               msg.kdfSec = kdfSec
+               msg.kdfBytes = kdfBytes
+            self.serialEmitter.register(self.receiveOnlineWalletDetail)
+            self.serialConnection.write(msg)
+            return
+
          # If this will be encrypted, we'll need to get their passphrase
          passwd = []
          if dlg.chkUseCrypto.isChecked():
@@ -2429,6 +2488,8 @@ class ArmoryMainWindow(QMainWindow):
             self.execGetImportWltName()
          elif dlg.importType_paper:
             self.execRestorePaperBackup()
+         elif dlg.importType_serial:
+            self.execImportSerial()
          elif dlg.importType_migrate:
             self.execMigrateSatoshi()
 
@@ -2578,7 +2639,120 @@ class ArmoryMainWindow(QMainWindow):
          self.addWalletToApplication(dlgPaper.newWallet, walletIsNew=False)
          #self.newWalletList.append([dlgPaper.newWallet, False])
          LOGINFO('Import Complete!')
-   
+
+   def execImportSerial(self):
+      self.serialEmitter.register(self.receiveOnlineWalletList)
+      self.serialConnection.write(pb.OnlineWalletRequest())
+
+   def receiveOnlineWalletList(self, response):
+      if isinstance(response, pb.OnlineWalletResponse):
+         self.serialEmitter.unregister(self.receiveOnlineWalletList)
+
+         dlg = DlgImportSerialWallet(self, self, response)
+         if dlg.exec_():
+            id = str(dlg.combo.itemData(dlg.combo.currentIndex()).toString())
+
+            if self.walletMap.has_key(id):
+               QMessageBox.warning(self, 'Duplicate Wallet!',\
+                  'You selected a wallet that has the same ID as one already '
+                  'in your wallet (%s)!  If you would like to import it anyway, '
+                  'please delete the duplicate wallet in Armory, first.'% id,\
+                  QMessageBox.Ok)
+               return
+
+            self.serialEmitter.register(self.receiveOnlineWalletDetail)
+            request = pb.OnlineWalletRequest()
+            request.uniqueIDB58 = id
+            request.metadataOnly = False
+            self.serialConnection.write(request)
+
+            # rough estimate of the wallet size, divided by the byte rate of the
+            # serial port multiplied by a fudge factor of 3
+            sleepTime = 65536 / (self.getSettingOrSetDefault("Serial_Rate", 115200) / 8) * 3
+
+            DlgExecLongProcess(lambda: time.sleep(sleepTime),
+               'Retrieving watching-only copy of '
+               '%s from offline device...' % id, self, self).exec_()
+
+   def receiveOnlineWalletDetail(self, response):
+      if isinstance(response, pb.Notification):
+         if response.type == response.INFORMATION:
+            QMessageBox.information(self, 'Offline device notification',
+               response.message, QMessageBox.Ok)
+         elif response.type == response.ERROR:
+            QMessageBox.warning(self, 'Offline device error',
+               response.message, QMessageBox.Ok)
+         else:
+            QMessageBox.warning(self, 'Offline device critical error',
+               response.message, QMessageBox.Ok)
+            self.serialEmitter.unregister(self.receiveOnlineWalletDetail)
+            msg = pb.Reset()
+            msg.shutdown = False
+            self.serialConnection.write(msg)
+      if isinstance(response, pb.OnlineWalletResponse):
+         self.serialEmitter.unregister(self.receiveOnlineWalletDetail)
+
+         id = (wlt.uniqueIDB58 for wlt in response.wallets).next()
+         wltData = (w for w in response.wallets if w.uniqueIDB58 == id).next()
+         unpacker = BinaryUnpacker(zlib.decompress(wltData.packedBytes))
+         newWlt = PyBtcWallet().readWalletData(unpacker, doScanNow=True, fileUpdate=False)
+         newWlt.fillAddressPool()
+         newWlt.walletPath = os.path.join(ARMORY_HOME_DIR, 'armory_%s_.watchonly.wallet' % newWlt.uniqueIDB58)
+         newWlt.writeFreshWalletFile(newWlt.getWalletPath())
+         newWlt.writeFreshWalletFile(newWlt.getWalletPath('backup'))
+
+         if TheBDM.getBDMState() in ('Uninitialized', 'Offline'):
+            self.addWalletToApplication(newWlt, walletIsNew=False)
+            return
+
+         if TheBDM.getBDMState()=='BlockchainReady':
+            doRescanNow = QMessageBox.question(self, 'Rescan Needed',\
+               'The wallet was imported successfully, but cannot be displayed '
+               'until the global transaction history is '
+               'searched for previous transactions.  This scan will potentially '
+               'take much longer than a regular rescan, and the wallet cannot '
+               'be shown on the main display until this rescan is complete.'
+               '<br><br>'
+               '<b>Would you like to go into offline mode to start this scan now?'
+               '</b>  If you click "No" the scan will be aborted, and the wallet '
+               'will not be added to Armory.',\
+               QMessageBox.Yes | QMessageBox.No)
+         else:
+            doRescanNow = QMessageBox.question(self, 'Rescan Needed',\
+               'The wallet was imported successfully, but its balance cannot '
+               'be determined until Armory performs a "recovery scan" for the '
+               'wallet.  This scan potentially takes much longer than a regular '
+               'scan, and must be completed for all imported wallets. '
+               '<br><br>'
+               'Armory is already in the middle of a scan and cannot be interrupted. '
+               'Would you like to start the recovery scan when it is done?'
+               '<br><br>'
+               '</b>  If you click "No," the wallet import will be aborted '
+               'and you must re-import the wallet when you '
+               'are able to wait for the recovery scan.',\
+               QMessageBox.Yes | QMessageBox.No)
+
+         if doRescanNow == QMessageBox.Yes:
+            LOGINFO('User requested rescan after wallet import')
+            TheBDM.startWalletRecoveryScan(newWlt)
+            self.setDashboardDetails()
+         else:
+            LOGINFO('User aborted the wallet-import scan')
+            QMessageBox.warning(self, 'Import Failed',\
+               'The wallet was not imported.', QMessageBox.Ok)
+
+            # The wallet cannot exist without also being on disk.
+            # If the user aborted, we should remove the disk data.
+            thepath       = newWlt.getWalletPath()
+            thepathBackup = newWlt.getWalletPath('backup')
+            os.remove(thepath)
+            os.remove(thepathBackup)
+            return
+
+         #self.addWalletToApplication(newWlt, walletIsNew=False)
+         self.newWalletList.append([newWlt, False])
+         LOGINFO('Import Complete!')
+
    #############################################################################
    def execMigrateSatoshi(self):
       reply = MsgBoxCustom(MSGBOX.Question, 'Wallet Version Warning', \
@@ -2884,6 +3058,9 @@ class ArmoryMainWindow(QMainWindow):
          if showWatchOnlyRecvWarningIfNecessary(wlt, self):
             DlgNewAddressDisp(wlt, self, self).exec_()
 
+   def showSerialDialog(self, mouseEvent):
+      if mouseEvent.button() == mouseEvent.LeftButton:
+         DlgSerialStatus(self, self).exec_()
 
 
    #############################################################################
@@ -3550,6 +3727,7 @@ class ArmoryMainWindow(QMainWindow):
       elif doClose or moc=='Close':
          self.doShutdown = True
          TheBDM.execCleanShutdown(wait=False)
+         self.serialConnection.close()
          self.sysTray.hide()
          self.closeForReal(event)
       else:
