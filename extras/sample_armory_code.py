@@ -6,12 +6,14 @@ from armoryengine import *
 from math import sqrt
 from time import sleep
 
-run_WalletCreate          = True
+# Run at least one of the LoadBlockchain's if running anything after it
+run_WalletCreate          = False
 run_LoadBlockchain_Async  = False
 run_LoadBlockchain_Block  = True
-run_WalletRescan          = True
-run_DiffChangeList        = False
+run_WalletRescan          = False
+run_DiffChangeList        = True
 run_UniqueAddresses       = False
+run_CumulativeSize        = True
 run_TrafficCamera         = False
 run_SatoshiDice           = False
 
@@ -129,7 +131,26 @@ if run_DiffChangeList:
    print '   Block Hash:     ', int_to_hex(minDiff, 32, BIGENDIAN)
    print '   Equiv Difficult:', maxDiff/(minDiff * 2**32)
    print '   Equiv Diff bits:', log(maxDiff/minDiff)/log(2)
+   print '   Block Header (hex): '
+   print '      ', binary_to_hex(TheBDM.getHeaderByHeight(minDiffBlk).serialize())
 
+
+################################################################################
+if run_CumulativeSize:
+   f = open('blksizelist.txt','w')
+   cumul = 0
+   for h in xrange(0,topBlock+1):
+      if h%10000 == 0:
+         print '\tAccumulated %d blocks' % h
+   
+      header = TheBDM.getHeaderByHeight(h)
+      cumul += header.getBlockSize()
+      if (h%2016==0) or h+1>=topBlock:
+         f.write('%d %d\n' % (h,cumul))
+
+   f.close()
+
+   
 
 
 ################################################################################
