@@ -6237,10 +6237,6 @@ class DlgOfflineTxCreated(ArmoryDialog):
          'Transmit the transaction data to the configured offline device '
          'to sign and return the transaction proposal.')
 
-#      self.btnTransmitCancel = QPushButton('Cancel transmission')
-#      self.btnTransmitCancel.setVisible(False)
-#      self.connect(self.btnTransmitCancel, SIGNAL('clicked()'), self.cancelTxSerialTransmit)
-
       lblInstruct = QRichLabel('<b>Instructions for completing this transaction:</b>')
       lblUTX = QRichLabel('<b>Transaction Data</b> \t (Unsigned ID: %s)' % txdp.uniqueB58)
       w,h = tightSizeStr(GETFONT('Fixed',8),'0'*90)[0], int(12*8.2)
@@ -6266,12 +6262,12 @@ class DlgOfflineTxCreated(ArmoryDialog):
          'step.  Alternatively, you can close this window, and complete the '
          'last step at a later time, using the "Offline Transactions" button '
          'on the main window')
-      btnNextStep = QPushButton('Next Step >>>')
-      maxBtnWidth = 1.5*relaxedSizeStr(btnNextStep, 'Next Step >>>')[0]
-      btnNextStep.setMaximumWidth(maxBtnWidth)
-      self.connect(btnNextStep, SIGNAL('clicked()'), self.doNextStep)
+      self.btnNextStep = QPushButton('Next Step >>>')
+      maxBtnWidth = 1.5*relaxedSizeStr(self.btnNextStep, 'Next Step >>>')[0]
+      self.btnNextStep.setMaximumWidth(maxBtnWidth)
+      self.connect(self.btnNextStep, SIGNAL('clicked()'), self.doNextStep)
 
-      nextStepStrip = makeLayoutFrame('Horiz', [lblNextStep, btnNextStep], \
+      nextStepStrip = makeLayoutFrame('Horiz', [lblNextStep, self.btnNextStep], \
                                                                      STYLE_SUNKEN)
 
       btnLater = QPushButton("Close Window")
@@ -6345,7 +6341,7 @@ class DlgOfflineTxCreated(ArmoryDialog):
          if msg.type == msg.INFORMATION:
             self.lblCopied.setText('<i>%s</i>' % msg.message)
          else:
-            self.lblCopied.setText('<font color="%s">%s</font>' % (msg.message, htmlColor("TextWarn")))
+            self.lblCopied.setText('<font color="%s">%s</font>' % (htmlColor("TextWarn"), msg.message))
             if msg.type == msg.CRITICAL_ERROR:
                self.cancelTxSerialTransmit(False)
       elif isinstance(msg, pb.SignatureResponse):
@@ -6363,13 +6359,13 @@ class DlgOfflineTxCreated(ArmoryDialog):
          self.main.serialConnection.write(msg)
 
       self.btnTransmitStart.setEnabled(True)
-#      self.btnTransmitCancel.setVisible(True)
+      self.btnNextStep.setEnabled(True)
       self.lblCopied.clear()
 
    def doTxSerialTransmit(self):
       """ Send the Unsigned-Tx block of data to TODO: """
       self.btnTransmitStart.setEnabled(False)
-#      self.btnTransmitCancel.setVisible(True)
+      self.btnNextStep.setEnabled(False)
 
       msg = pb.SignatureRequest()
       msg.wallet.uniqueIDB58 = self.wlt.uniqueIDB58

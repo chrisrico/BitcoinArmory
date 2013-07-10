@@ -1314,7 +1314,7 @@ class ArmoryMainWindow(QMainWindow):
 
    #############################################################################
    def bitcoindIsAvailable(self):
-      return satoshiIsAvailable('127.0.0.1', BITCOIN_PORT)
+      return satoshiIsAvailable(BITCOIN_IP, BITCOIN_PORT)
 
                   
 
@@ -1372,7 +1372,7 @@ class ArmoryMainWindow(QMainWindow):
                                           func_madeConnect=showOnlineMsg, \
                                           func_newTx=self.newTxFunc)
                                           #func_newTx=newTxFunc)
-         reactor.callWhenRunning(reactor.connectTCP, '127.0.0.1', \
+         reactor.callWhenRunning(reactor.connectTCP, BITCOIN_IP, \
                                           BITCOIN_PORT, self.NetworkingFactory)
 
    

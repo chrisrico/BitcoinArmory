@@ -69,6 +69,7 @@ parser = optparse.OptionParser(usage="%prog [options]\n")
 parser.add_option("--settings",        dest="settingsPath",default='DEFAULT', type="str",          help="load Armory with a specific settings file")
 parser.add_option("--datadir",         dest="datadir",     default='DEFAULT', type="str",          help="Change the directory that Armory calls home")
 parser.add_option("--satoshi-datadir", dest="satoshiHome", default='DEFAULT', type='str',          help="The Bitcoin-Qt/bitcoind home directory")
+parser.add_option("--satoshi-ip",      dest="satoshiIP",   default='127.0.0.1',type='str',         help="The Bitcoin-Qt/bitcoind IP address")
 parser.add_option("--satoshi-port",    dest="satoshiPort", default='DEFAULT', type="str",          help="For Bitcoin-Qt instances operating on a non-standard port")
 #parser.add_option("--bitcoind-path",   dest="bitcoindPath",default='DEFAULT', type="str",          help="Path to the location of bitcoind on your system")
 parser.add_option("--rpcport",         dest="rpcport",     default='DEFAULT', type="str",          help="RPC port for running armoryd.py")
@@ -401,6 +402,7 @@ else:
    P2SHBYTE = '\xc4'
    PRIVKEYBYTE = '\xef'
 
+BITCOIN_IP = CLI_OPTIONS.satoshiIP
 if not CLI_OPTIONS.satoshiPort == 'DEFAULT':
    try:
       BITCOIN_PORT = int(CLI_OPTIONS.satoshiPort)
@@ -10313,7 +10315,7 @@ class FakeClientFactory(ReconnectingClientFactory):
 
 #############################################################################
 import socket
-def satoshiIsAvailable(host='127.0.0.1', port=BITCOIN_PORT, timeout=0.01):
+def satoshiIsAvailable(host=BITCOIN_IP, port=BITCOIN_PORT, timeout=0.01):
 
    if not isinstance(port, (list,tuple)):
       port = [port]
@@ -10664,7 +10666,7 @@ class SatoshiDaemonManager(object):
       if not isASCII(self.bitconf['rpcpassword']):
          LOGERROR('Non-ASCII character in bitcoin.conf (rpcpassword)!')
 
-      self.bitconf['host'] = '127.0.0.1'
+      self.bitconf['host'] = BITCOIN_IP
       
 
 
