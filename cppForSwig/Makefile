@@ -1,79 +1,77 @@
-COMPILER = g++ 
-#COMPILER_OPTS = -c -g -Wall -fPIC -D_DEBUG
-COMPILER_OPTS = -c -O2 -pipe -fPIC 
+CXX = g++
 
-#**************************************************************************
-LINKER = g++ 
-OBJS = UniversalTimer.o BinaryData.o FileDataPtr.o BtcUtils.o BlockObj.o BlockUtils.o EncryptionUtils.o libcryptopp.a
-
-
-DEPSDIR ?= /usr
-
-INCLUDE_OPTS += -Icryptopp -DUSE_CRYPTOPP -D__STDC_LIMIT_MACROS 
-LIBRARY_OPTS += -lpthread 
-SWIG_OPTS    += -c++ -python -classic -threads
-PYVER 		 += `python -c 'import sys; print str(sys.version_info[0]) + "." + str(sys.version_info[1])'`
-
-
-UNAME := $(shell uname)
-
-ifeq ($(UNAME), Darwin)
-   # This configuration assumes you have setup your 10.X.X system like
-   # Red Emerald in this thread: 
-   #    https://bitcointalk.org/index.php?topic=73648.msg976015#msg976015
-	# The makefile updates he shows are already tied into this if/else branch
-   SWIG_INC     += -I"/usr/include/python$(PYVER)"
-   STATICPYTHON +=   "/usr/lib/python$(PYVER)/config/libpython$(PYVER).a"
+ifdef DEBUG
+CFLAGS=-g3 -Wall -pipe -fPIC
+CXXFLAGS=-g3 -Wall -pipe -fPIC
 else
-   SWIG_INC     += -I"$(DEPSDIR)/include/python$(PYVER)"
-   STATICPYTHON +=   "$(DEPSDIR)/lib/libpython$(PYVER).so"
-
-
+CFLAGS=-O2 -pipe -fPIC
+CXXFLAGS=-O2 -pipe -fPIC
 endif
 
+platform=$(shell uname)
+
+ifeq ($(shell uname), Darwin)
+MACOSX_DEPLOYMENT_TARGET=10.7
+export MACOSX_DEPLOYMENT_TARGET
+LDFLAGS += -undefined dynamic_lookup -headerpad_max_install_names
+endif
 
 #**************************************************************************
-all :
-	make BlockUtilsTest.out
-	
-swig : $(OBJS) CppBlockUtils_wrap.o
-	g++ -shared $(LIBRARY_OPTS) $(OBJS) $(STATICPYTHON) CppBlockUtils_wrap.o -o ../_CppBlockUtils.so
-	pyrcc4 -o ../qrc_img_resources.py ../imgList.xml
+LINK = $(CXX)
 
-BlockUtilsTest.out : $(OBJS) BlockUtilsTest.cpp
-	$(LINKER) $(OBJS) -o BlockUtilsTest.out $(INCLUDE_OPTS) $(LIBRARY_OPTS) BlockUtilsTest.cpp
+OBJS = UniversalTimer.o BinaryData.o leveldb_wrapper.o StoredBlockObj.o BtcUtils.o BlockObj.o BlockUtils.o EncryptionUtils.o libcryptopp.a libleveldb.a sighandler.o
+
+#if python is specified, use it
+ifndef PYVER
+PYTHON_INCLUDES=$(shell python-config --includes )
+else
+PYTHON_INCLUDES=$(shell $(PYVER)-config --includes )
+endif
+
+CPPFLAGS += $(ARMORY_CPPFLAGS) -Icryptopp -Ileveldb/include -DUSE_CRYPTOPP -D__STDC_LIMIT_MACROS
+LDLIBS += -lpthread -Lleveldb
+SWIG_OPTS    += -c++ -python -classic -threads
+
+SWIG_INC     += $(PYTHON_INCLUDES)
+
+CXXCPP += $(CPPFLAGS)
+
+
+#**************************************************************************
+
+all: ../_CppBlockUtils.so ../qrc_img_resources.py
+
+../_CppBlockUtils.so: $(OBJS) CppBlockUtils_wrap.o
+	$(LINK) -shared -fPIC $(LDLIBS) $(LDFLAGS) $(CXXFLAGS) $(OBJS) $(STATICPYTHON) CppBlockUtils_wrap.o -o ../_CppBlockUtils.so
+
+../qrc_img_resources.py: ../imgList.xml
+	pyrcc4 -o ../qrc_img_resources.py ../imgList.xml
 
 
 #**************************************************************************
 libcryptopp.a: Makefile
-	cd cryptopp; make libcryptopp.a; mv libcryptopp.a ..
+	$(MAKE) -C cryptopp libcryptopp.a
+	mv cryptopp/libcryptopp.a .
 
-UniversalTimer.o: UniversalTimer.h UniversalTimer.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) UniversalTimer.cpp
+libleveldb.a: Makefile
+	$(MAKE) -C leveldb libleveldb.a
+	mv leveldb/libleveldb.a .
 
-BinaryData.o: BinaryData.h BinaryData.cpp BtcUtils.h 
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) BinaryData.cpp
+%.o: %.cpp %.h
+	$(CXX) $(CXXCPP) $(CXXFLAGS) -c $<
 
-FileDataPtr.o: FileDataPtr.h BtcUtils.h BinaryData.h FileDataPtr.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) FileDataPtr.cpp
-
-BtcUtils.o: BtcUtils.h BtcUtils.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) BtcUtils.cpp
-
-BlockObj.o: BinaryData.h BtcUtils.h BlockObj.h BlockObj.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) BlockObj.cpp
-
-BlockUtils.o: BlockUtils.h BinaryData.h UniversalTimer.h BlockUtils.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) BlockUtils.cpp
-
-EncryptionUtils.o: BtcUtils.h BinaryData.h EncryptionUtils.h EncryptionUtils.cpp
-	$(COMPILER) $(COMPILER_OPTS) $(INCLUDE_OPTS) EncryptionUtils.cpp
-
-CppBlockUtils_wrap.cxx: BlockUtils.h BinaryData.h BlockObj.h UniversalTimer.h BlockUtils.h BlockUtils.cpp CppBlockUtils.i
+BinaryData.o: BtcUtils.h log.h
+BtcUtils.o: log.h
+BlockObj.o: BinaryData.h BtcUtils.h
+StoredBlockObj.o: log.h BtcUtils.h BinaryData.h
+leveldb_wrapper.o: log.h BtcUtils.h BinaryData.h
+BlockUtils.o: log.h BinaryData.h UniversalTimer.h PartialMerkle.h
+EncryptionUtils.o: log.h BtcUtils.h BinaryData.h
+CppBlockUtils_wrap.cxx: log.h BlockUtils.h BinaryData.h BlockObj.h UniversalTimer.h BlockUtils.h BlockUtils.cpp CppBlockUtils.i
 	swig $(SWIG_OPTS) -outdir ../ -v CppBlockUtils.i 
 
-CppBlockUtils_wrap.o: BlockUtils.h  BinaryData.h UniversalTimer.h CppBlockUtils_wrap.cxx
-	$(COMPILER) $(SWIG_INC) $(COMPILER_OPTS) $(INCLUDE_OPTS) $(LIBRARY_OPTS) CppBlockUtils_wrap.cxx
+CppBlockUtils_wrap.o: log.h BlockUtils.h  BinaryData.h UniversalTimer.h CppBlockUtils_wrap.cxx
+	$(CXX) $(SWIG_INC) $(CXXFLAGS) $(CXXCPP) -c CppBlockUtils_wrap.cxx
 
 
 
@@ -83,8 +81,14 @@ CppBlockUtils_wrap.o: BlockUtils.h  BinaryData.h UniversalTimer.h CppBlockUtils_
 #************************************************************************
 clean:
 	touch CppBlockUtils.i
-	rm -f *.o *.out libcryptopp.a cryptopp/*.out
-	cd cryptopp; make clean;
-	
+	rm -f *.o *.out *.a
+	rm -f CppBlockUtils_wrap.cxx 
+	rm -f pypaths.txt
 
-
+hardclean:
+	touch CppBlockUtils.i
+	rm -f *.o *.out *.a
+	rm -f CppBlockUtils_wrap.cxx 
+	rm -f pypaths.txt
+	$(MAKE) -C cryptopp clean
+	$(MAKE) -C leveldb clean

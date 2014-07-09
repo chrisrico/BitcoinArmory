@@ -6,12 +6,14 @@ from armoryengine import *
 from math import sqrt
 from time import sleep
 
-run_WalletCreate          = True
+# Run at least one of the LoadBlockchain's if running anything after it
+run_WalletCreate          = False
 run_LoadBlockchain_Async  = False
 run_LoadBlockchain_Block  = True
-run_WalletRescan          = True
-run_DiffChangeList        = False
+run_WalletRescan          = False
+run_DiffChangeList        = True
 run_UniqueAddresses       = False
+run_CumulativeSize        = True
 run_TrafficCamera         = False
 run_SatoshiDice           = False
 
@@ -25,7 +27,7 @@ if run_WalletCreate:
    print '\n\nCreating a new C++ wallet, add a few addresses...'
    cppWallet = Cpp.BtcWallet()
    cppWallet.addAddress_1_( hex_to_binary('11b366edfc0a8b66feebae5c2e25a7b6a5d1cf31') )  # hash160 (hex)
-   cppWallet.addAddress_1_( addrStr_to_hash160('1EbAUHsitefy3rSECh8eK2fdAWTUbpVUDN') )   # addrStr
+   cppWallet.addAddress_1_( addrStr_to_hash160('1EbAUHsitefy3rSECh8eK2fdAWTUbpVUDN')[1] )   # addrStr
    cppWallet.addAddress_1_('\x1b~\xa7*\x85\t\x12\xb7=\xd4G\xf3\xbd\xc1\x00\xf1\x00\x8b\xde\xb0') # hash160 (bin)
 
    print 'Addresses in this wallet:'
@@ -129,7 +131,26 @@ if run_DiffChangeList:
    print '   Block Hash:     ', int_to_hex(minDiff, 32, BIGENDIAN)
    print '   Equiv Difficult:', maxDiff/(minDiff * 2**32)
    print '   Equiv Diff bits:', log(maxDiff/minDiff)/log(2)
+   print '   Block Header (hex): '
+   print '      ', binary_to_hex(TheBDM.getHeaderByHeight(minDiffBlk).serialize())
 
+
+################################################################################
+if run_CumulativeSize:
+   f = open('blksizelist.txt','w')
+   cumul = 0
+   for h in xrange(0,topBlock+1):
+      if h%10000 == 0:
+         print '\tAccumulated %d blocks' % h
+   
+      header = TheBDM.getHeaderByHeight(h)
+      cumul += header.getBlockSize()
+      if (h%2016==0) or h+1>=topBlock:
+         f.write('%d %d\n' % (h,cumul))
+
+   f.close()
+
+   
 
 
 ################################################################################
@@ -201,7 +222,7 @@ if run_SatoshiDice:
    for line in httppage:
       if 'lessthan' in line and '1dice' in line:
          targ,addr,winr,mult,hous,rtrn   = extractLineData(line)
-         diceAddr                        = addrStr_to_hash160(addr)
+         diceAddr                        = addrStr_to_hash160(addr)[1]
          diceTargetMap[diceAddr]         = int(targ)
          dicePctWinMap[diceAddr]         = float(winr[:-1])/100.0
          diceWinMultMap[diceAddr]        = float(mult[:-1])
